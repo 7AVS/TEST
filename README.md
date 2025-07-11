@@ -1,22 +1,23 @@
 """
 ================================================================================
-PHASE 1: UNIVERSE OVERVIEW (40,000 FEET VIEW) - VERSION 2
+PHASE 2: CAMPAIGN (MNE) INTERACTION ANALYSIS
 ================================================================================
-Purpose: Establish baseline metrics for VVD campaign analysis
+Purpose: Deep dive into individual campaign performance and interactions
 Output: HTML tables displayed directly in Jupyter notebook cells
 Author: Campaign Analysis Team
 Date: July 2025
-Version: 2.0
+Version: 1.0
 
-CHANGES IN V2:
-- Fixed PySpark Row object handling (no Python built-in conflicts)
-- Fixed success rate calculations showing zeros
-- Added statistical significance testing
-- Added Sample Ratio Mismatch (SRM) detection
-- Enhanced success metrics with volume details
+This phase analyzes:
+1. Campaign-specific volume and reach metrics
+2. Performance by contact frequency (diminishing returns)
+3. Campaign overlap patterns
+4. Temporal patterns and seasonality
 
-IMPORTANT: This is an exploratory analysis. No external files are created.
-           The executed notebook serves as the audit trail.
+IMPORTANT: Following PySpark best practices from Phase 1 v2
+- Explicit type conversions for Row objects
+- No Python built-in naming conflicts
+- Clear distinction between PySpark and Python functions
            
 Data Source: /user/427966379/final_df.parquet
 ================================================================================
@@ -24,44 +25,39 @@ Data Source: /user/427966379/final_df.parquet
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
+from pyspark.sql.window import Window
 from IPython.display import display, HTML
 from datetime import datetime
 import math
+# Import Python built-ins with different names to avoid conflicts
+from builtins import sum as python_sum
+from builtins import min as python_min
+from builtins import max as python_max
 
 
 def calculate_statistical_significance(success_a, total_a, success_b, total_b, alpha=0.05):
     """
     Calculate statistical significance using z-test for proportions
-    
-    Parameters:
-    -----------
-    success_a : int - Number of successes in group A (action)
-    total_a : int - Total observations in group A
-    success_b : int - Number of successes in group B (control)
-    total_b : int - Total observations in group B
-    alpha : float - Significance level (default 0.05)
-    
-    Returns:
-    --------
-    dict with p_value, is_significant, and confidence_interval
+    (Copied from Phase 1 v2 for consistency)
     """
     # Avoid division by zero
     if total_a == 0 or total_b == 0:
         return {
             'p_value': 1.0,
             'is_significant': False,
-            'confidence_interval': (0, 0)
+            'confidence_interval': (0, 0),
+            'z_score': 0
         }
     
     # Calculate proportions
-    p_a = success_a / total_a
-    p_b = success_b / total_b
+    p_a = float(success_a) / float(total_a)
+    p_b = float(success_b) / float(total_b)
     
     # Pooled proportion
-    p_pooled = (success_a + success_b) / (total_a + total_b)
+    p_pooled = float(success_a + success_b) / float(total_a + total_b)
     
     # Standard error
-    se = math.sqrt(p_pooled * (1 - p_pooled) * (1/total_a + 1/total_b))
+    se = math.sqrt(p_pooled * (1 - p_pooled) * (1/float(total_a) + 1/float(total_b)))
     
     # Z-score
     if se == 0:
@@ -70,7 +66,6 @@ def calculate_statistical_significance(success_a, total_a, success_b, total_b, a
         z_score = (p_a - p_b) / se
     
     # P-value (two-tailed test)
-    # Using approximation for normal distribution
     p_value = 2 * (1 - 0.5 * (1 + math.erf(abs(z_score) / math.sqrt(2))))
     
     # Confidence interval for the difference
@@ -87,55 +82,9 @@ def calculate_statistical_significance(success_a, total_a, success_b, total_b, a
     }
 
 
-def calculate_sample_ratio_mismatch(actual_a, actual_b, expected_ratio=1.0):
+def generate_phase2_analysis(df):
     """
-    Calculate Sample Ratio Mismatch (SRM) to detect randomization issues
-    
-    Parameters:
-    -----------
-    actual_a : int - Actual count in group A
-    actual_b : int - Actual count in group B
-    expected_ratio : float - Expected ratio of A/B (default 1.0 for 50/50 split)
-    
-    Returns:
-    --------
-    dict with srm_detected, chi_square, and p_value
-    """
-    total = actual_a + actual_b
-    if total == 0:
-        return {
-            'srm_detected': False,
-            'chi_square': 0,
-            'p_value': 1.0
-        }
-    
-    # Expected counts based on ratio
-    expected_a = total * (expected_ratio / (1 + expected_ratio))
-    expected_b = total * (1 / (1 + expected_ratio))
-    
-    # Chi-square test
-    chi_square = ((actual_a - expected_a) ** 2 / expected_a + 
-                  (actual_b - expected_b) ** 2 / expected_b)
-    
-    # P-value approximation for chi-square with 1 degree of freedom
-    # Using approximation: p ≈ 1 - Φ(√χ²)
-    p_value = 1 - 0.5 * (1 + math.erf(math.sqrt(chi_square) / math.sqrt(2)))
-    
-    return {
-        'srm_detected': p_value < 0.05,
-        'chi_square': chi_square,
-        'p_value': p_value,
-        'expected_a': expected_a,
-        'expected_b': expected_b
-    }
-
-
-def generate_phase1_analysis(df):
-    """
-    Main function to generate Phase 1 baseline metrics
-    
-    This function performs high-level analysis without deep dives,
-    establishing baselines that will be referenced throughout the analysis.
+    Main function to generate Phase 2 campaign interaction analysis
     
     Parameters:
     -----------
@@ -150,272 +99,356 @@ def generate_phase1_analysis(df):
     # ========================================================================
     # HEADER SECTION - Analysis identification
     # ========================================================================
-    display(HTML("<h1>PHASE 1: UNIVERSE OVERVIEW - BASELINE METRICS (v2)</h1>"))
+    display(HTML("<h1>PHASE 2: CAMPAIGN (MNE) INTERACTION ANALYSIS</h1>"))
     display(HTML(f"<p><b>Analysis Date:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>"))
     display(HTML("<p><b>Data Source:</b> /user/427966379/final_df.parquet</p>"))
     display(HTML("<hr>"))
     
     # ========================================================================
-    # DATA PREPARATION - Filter to action group for most metrics
+    # DATA PREPARATION
     # ========================================================================
-    # IMPORTANT: We analyze primarily the ACTION GROUP (TG4) as they received
-    # the actual campaign communications. Control group (TG7) is used only
-    # for lift calculations.
+    # Filter to action group for main analysis
     df_action = df.filter(F.col("TST_GRP_CD") == "TG4")
     df_control = df.filter(F.col("TST_GRP_CD") == "TG7")
     
+    # Get list of campaigns for iteration
+    campaigns_list = df_action.select("MNE").distinct().orderBy("MNE").collect()
+    campaign_names = [row.MNE for row in campaigns_list]
     
     # ========================================================================
-    # SECTION 1: UNIVERSE SIZE METRICS
+    # SECTION 1: CAMPAIGN VOLUME AND REACH METRICS
     # ========================================================================
-    # This section establishes the scale of our analysis - how much data
-    # we're working with and what time period it covers.
+    display(HTML("<h2>1. CAMPAIGN VOLUME AND REACH METRICS</h2>"))
+    display(HTML("<p>Detailed deployment patterns and client reach by campaign</p>"))
     
-    display(HTML("<h2>1. UNIVERSE SIZE METRICS</h2>"))
-    display(HTML("<p>Understanding the scale and scope of our campaign data</p>"))
+    # Calculate metrics for each campaign
+    campaign_metrics = []
     
-    # Calculate total deployments (each row is one client-tactic combination)
-    total_deployments = df_action.count()
-    
-    # Calculate unique clients (removing duplicates from multiple campaigns)
-    unique_clients = df_action.select("CLNT_NO").distinct().count()
-    
-    # Calculate average deployments per client
-    avg_deployments_per_client = float(total_deployments) / float(unique_clients) if unique_clients > 0 else 0
-    
-    # Get list of all campaigns in the dataset
-    campaigns = df_action.select("MNE").distinct().orderBy("MNE").collect()
-    campaign_list = [row.MNE for row in campaigns]
-    num_campaigns = len(campaign_list)
-    
-    # Determine the time period covered by the data
-    # TREATMT_STRT_DT is when the campaign was deployed to the client
-    date_range = df_action.select(
-        F.min("TREATMT_STRT_DT").alias("min_date"),
-        F.max("TREATMT_STRT_DT").alias("max_date")
-    ).collect()[0]
-    
-    # Calculate the number of months covered in our analysis period
-    if date_range.min_date and date_range.max_date:
-        months_covered = ((date_range.max_date.year - date_range.min_date.year) * 12 + 
-                         date_range.max_date.month - date_range.min_date.month + 1)
-    else:
-        months_covered = 0
-    
-    # Build and display the HTML table
-    html_table = """
-    <table border='1' style='border-collapse: collapse;'>
-    <tr style='background-color: #f2f2f2;'>
-        <th style='padding: 8px; text-align: left;'>Metric</th>
-        <th style='padding: 8px; text-align: right;'>Value</th>
-    </tr>
-    """
-    
-    # Add each metric as a row in the table
-    html_table += f"<tr><td style='padding: 8px;'>Total Deployments (Action Group)</td><td style='padding: 8px; text-align: right;'>{total_deployments:,}</td></tr>"
-    html_table += f"<tr><td style='padding: 8px;'>Unique Clients (Action Group)</td><td style='padding: 8px; text-align: right;'>{unique_clients:,}</td></tr>"
-    html_table += f"<tr><td style='padding: 8px;'>Average Deployments per Client</td><td style='padding: 8px; text-align: right;'>{avg_deployments_per_client:.2f}</td></tr>"
-    html_table += f"<tr><td style='padding: 8px;'>Number of Campaigns</td><td style='padding: 8px; text-align: right;'>{num_campaigns}</td></tr>"
-    html_table += f"<tr><td style='padding: 8px;'>Campaign List</td><td style='padding: 8px; text-align: right;'>{', '.join(campaign_list)}</td></tr>"
-    html_table += f"<tr><td style='padding: 8px;'>Time Period</td><td style='padding: 8px; text-align: right;'>{date_range.min_date} to {date_range.max_date}</td></tr>"
-    html_table += f"<tr><td style='padding: 8px;'>Months Covered</td><td style='padding: 8px; text-align: right;'>{months_covered}</td></tr>"
-    html_table += "</table>"
-    
-    display(HTML(html_table))
-    
-    
-    # ========================================================================
-    # SECTION 2: TEST GROUP SPLIT
-    # ========================================================================
-    # This section shows the distribution between action and control groups.
-    # This is critical for understanding the validity of our lift calculations.
-    
-    display(HTML("<h2>2. TEST GROUP SPLIT</h2>"))
-    display(HTML("<p>Distribution of deployments between test and control groups</p>"))
-    
-    # Count deployments and unique clients by test group
-    # TST_GRP_CD identifies whether a client was in action (TG4) or control (TG7)
-    test_group_split = df.groupBy("TST_GRP_CD").agg(
-        F.count("*").alias("deployments"),
-        F.countDistinct("CLNT_NO").alias("unique_clients")
-    ).orderBy("TST_GRP_CD").collect()
-    
-    # Calculate total deployments across all test groups for percentage calculation
-    # Using explicit loop to avoid built-in conflicts
-    total_all_deployments = 0
-    for row in test_group_split:
-        total_all_deployments += int(row.deployments)
-    
-    # Check for Sample Ratio Mismatch
-    action_count = 0
-    control_count = 0
-    for row in test_group_split:
-        if row.TST_GRP_CD == "TG4":
-            action_count = int(row.deployments)
-        elif row.TST_GRP_CD == "TG7":
-            control_count = int(row.deployments)
-    
-    srm_result = calculate_sample_ratio_mismatch(action_count, control_count)
-    
-    # Build the test group comparison table
-    html_table = """
-    <table border='1' style='border-collapse: collapse;'>
-    <tr style='background-color: #f2f2f2;'>
-        <th style='padding: 8px;'>Test Group</th>
-        <th style='padding: 8px; text-align: right;'>Deployments</th>
-        <th style='padding: 8px; text-align: right;'>Unique Clients</th>
-        <th style='padding: 8px; text-align: right;'>% of Deployments</th>
-    </tr>
-    """
-    
-    # Add a row for each test group
-    for row in test_group_split:
-        pct = float(row.deployments) / float(total_all_deployments) * 100 if total_all_deployments > 0 else 0
+    for campaign in campaign_names:
+        # Filter data for this campaign
+        df_campaign_action = df_action.filter(F.col("MNE") == campaign)
+        df_campaign_control = df_control.filter(F.col("MNE") == campaign)
         
-        # Highlight the test group codes for clarity
-        group_desc = "Action Group" if row.TST_GRP_CD == "TG4" else "Control Group"
+        # Calculate deployment metrics
+        action_deployments = df_campaign_action.count()
+        control_deployments = df_campaign_control.count()
         
-        html_table += f"""
-        <tr>
-            <td style='padding: 8px;'>{row.TST_GRP_CD} ({group_desc})</td>
-            <td style='padding: 8px; text-align: right;'>{int(row.deployments):,}</td>
-            <td style='padding: 8px; text-align: right;'>{int(row.unique_clients):,}</td>
-            <td style='padding: 8px; text-align: right;'>{pct:.1f}%</td>
-        </tr>
-        """
+        # Calculate unique clients
+        action_unique_clients = df_campaign_action.select("CLNT_NO").distinct().count()
+        control_unique_clients = df_campaign_control.select("CLNT_NO").distinct().count()
+        
+        # Calculate contact frequency distribution for this campaign
+        if action_deployments > 0:
+            contact_freq = df_campaign_action.groupBy("CLNT_NO").agg(
+                F.count("*").alias("contacts")
+            ).groupBy("contacts").count().orderBy("contacts").collect()
+            
+            # Find max contacts using explicit loop
+            max_contacts = 0
+            for row in contact_freq:
+                if int(row.contacts) > max_contacts:
+                    max_contacts = int(row.contacts)
+        else:
+            max_contacts = 0
+        
+        # Store metrics
+        campaign_metrics.append({
+            'campaign': campaign,
+            'action_deployments': action_deployments,
+            'control_deployments': control_deployments,
+            'action_unique_clients': action_unique_clients,
+            'control_unique_clients': control_unique_clients,
+            'avg_contacts_per_client': float(action_deployments) / float(action_unique_clients) if action_unique_clients > 0 else 0,
+            'max_contacts': max_contacts
+        })
     
-    html_table += "</table>"
-    display(HTML(html_table))
-    
-    # Display SRM results
-    if srm_result['srm_detected']:
-        display(HTML(f"<p style='color: red;'><b>⚠️ Sample Ratio Mismatch Detected!</b> p-value: {srm_result['p_value']:.4f}</p>"))
-    else:
-        display(HTML(f"<p style='color: green;'>✓ No Sample Ratio Mismatch detected (p-value: {srm_result['p_value']:.4f})</p>"))
-    
-    
-    # ========================================================================
-    # SECTION 3: CAMPAIGN VOLUME BASELINES
-    # ========================================================================
-    # This section shows the distribution of deployments across campaigns.
-    # Key insight: Are some campaigns dominating the contact strategy?
-    
-    display(HTML("<h2>3. CAMPAIGN VOLUME BASELINES (Action Group Only)</h2>"))
-    display(HTML("<p>Volume and reach metrics by campaign - identifying potential imbalances</p>"))
-    
-    # Aggregate deployments and unique clients by campaign (MNE)
-    # This helps identify which campaigns are dominating customer contacts
-    campaign_volumes = df_action.groupBy("MNE").agg(
-        F.count("*").alias("deployments"),
-        F.countDistinct("CLNT_NO").alias("unique_clients")
-    ).orderBy(F.desc("deployments")).collect()
-    
-    # Build the campaign volume comparison table
+    # Display campaign volume table
     html_table = """
     <table border='1' style='border-collapse: collapse;'>
     <tr style='background-color: #f2f2f2;'>
         <th style='padding: 8px;'>Campaign</th>
-        <th style='padding: 8px; text-align: right;'>Deployments</th>
-        <th style='padding: 8px; text-align: right;'>Unique Clients</th>
-        <th style='padding: 8px; text-align: right;'>% of Total</th>
+        <th style='padding: 8px; text-align: right;'>Action Deployments</th>
+        <th style='padding: 8px; text-align: right;'>Control Deployments</th>
+        <th style='padding: 8px; text-align: right;'>Action Unique Clients</th>
+        <th style='padding: 8px; text-align: right;'>Control Unique Clients</th>
         <th style='padding: 8px; text-align: right;'>Avg Contacts/Client</th>
+        <th style='padding: 8px; text-align: right;'>Max Contacts</th>
     </tr>
     """
     
-    # Add each campaign's metrics
-    for row in campaign_volumes:
-        # Calculate percentage of total deployments
-        pct = float(row.deployments) / float(total_deployments) * 100 if total_deployments > 0 else 0
-        
-        # Calculate average contacts per client for this campaign
-        avg_per_client = float(row.deployments) / float(row.unique_clients) if row.unique_clients > 0 else 0
-        
-        # Highlight if a campaign is dominating (>50% of deployments)
-        row_style = " style='background-color: #ffe6e6;'" if pct > 50 else ""
-        
+    for metrics in campaign_metrics:
         html_table += f"""
-        <tr{row_style}>
-            <td style='padding: 8px;'>{row.MNE}</td>
-            <td style='padding: 8px; text-align: right;'>{int(row.deployments):,}</td>
-            <td style='padding: 8px; text-align: right;'>{int(row.unique_clients):,}</td>
-            <td style='padding: 8px; text-align: right;'>{pct:.1f}%</td>
-            <td style='padding: 8px; text-align: right;'>{avg_per_client:.2f}</td>
+        <tr>
+            <td style='padding: 8px;'>{metrics['campaign']}</td>
+            <td style='padding: 8px; text-align: right;'>{metrics['action_deployments']:,}</td>
+            <td style='padding: 8px; text-align: right;'>{metrics['control_deployments']:,}</td>
+            <td style='padding: 8px; text-align: right;'>{metrics['action_unique_clients']:,}</td>
+            <td style='padding: 8px; text-align: right;'>{metrics['control_unique_clients']:,}</td>
+            <td style='padding: 8px; text-align: right;'>{metrics['avg_contacts_per_client']:.2f}</td>
+            <td style='padding: 8px; text-align: right;'>{metrics['max_contacts']}</td>
         </tr>
         """
     
     html_table += "</table>"
     display(HTML(html_table))
     
+    # ========================================================================
+    # SECTION 2: CAMPAIGN PERFORMANCE BY CONTACT FREQUENCY
+    # ========================================================================
+    display(HTML("<h2>2. CAMPAIGN PERFORMANCE BY CONTACT FREQUENCY</h2>"))
+    display(HTML("<p>Diminishing returns analysis - success rates by number of contacts</p>"))
+    
+    # Define success metric mapping (from Phase 1)
+    campaign_success_map = {
+        'VCN': 'acquisition_success',
+        'VDA': 'activation_success',
+        'VDT': 'activation_success',
+        'VUI': 'usage_success',
+        'VAW': 'provisioning_success',
+        'VUT': 'provisioning_success'
+    }
+    
+    # Analyze each campaign's diminishing returns
+    for campaign in campaign_names:
+        display(HTML(f"<h3>Campaign: {campaign}</h3>"))
+        
+        # Get the appropriate success metric
+        success_col = campaign_success_map.get(campaign, 'activation_success')
+        
+        # Check if success column exists
+        if success_col not in df.columns:
+            display(HTML(f"<p style='color: red;'>Success column '{success_col}' not found for campaign {campaign}</p>"))
+            continue
+        
+        # Create contact sequence number using window function
+        window_spec = Window.partitionBy("CLNT_NO").orderBy("TREATMT_STRT_DT")
+        
+        # Add contact sequence number
+        df_campaign_seq = df_action.filter(F.col("MNE") == campaign).withColumn(
+            "contact_sequence", F.row_number().over(window_spec)
+        )
+        
+        # Create contact buckets
+        df_campaign_buckets = df_campaign_seq.withColumn(
+            "contact_bucket",
+            F.when(F.col("contact_sequence") == 1, "1")
+            .when(F.col("contact_sequence") == 2, "2")
+            .when(F.col("contact_sequence") == 3, "3")
+            .when((F.col("contact_sequence") >= 4) & (F.col("contact_sequence") <= 5), "4-5")
+            .when((F.col("contact_sequence") >= 6) & (F.col("contact_sequence") <= 10), "6-10")
+            .otherwise("11+")
+        )
+        
+        # Calculate performance by bucket
+        performance_by_bucket = df_campaign_buckets.groupBy("contact_bucket").agg(
+            F.count("*").alias("deployments"),
+            F.countDistinct("CLNT_NO").alias("unique_clients"),
+            F.sum(F.when(F.col(success_col) == 1, 1).otherwise(0)).alias("successes")
+        ).orderBy("contact_bucket").collect()
+        
+        # Display performance table
+        html_table = """
+        <table border='1' style='border-collapse: collapse;'>
+        <tr style='background-color: #f2f2f2;'>
+            <th style='padding: 8px;'>Contact Bucket</th>
+            <th style='padding: 8px; text-align: right;'>Deployments</th>
+            <th style='padding: 8px; text-align: right;'>Unique Clients</th>
+            <th style='padding: 8px; text-align: right;'>Successes</th>
+            <th style='padding: 8px; text-align: right;'>Success Rate</th>
+            <th style='padding: 8px; text-align: right;'>Incremental Change</th>
+        </tr>
+        """
+        
+        # Track previous success rate for incremental calculation
+        prev_success_rate = None
+        bucket_order = ["1", "2", "3", "4-5", "6-10", "11+"]
+        
+        # Create dict for ordered display
+        bucket_dict = {}
+        for row in performance_by_bucket:
+            bucket_dict[row.contact_bucket] = row
+        
+        for bucket in bucket_order:
+            if bucket in bucket_dict:
+                row = bucket_dict[bucket]
+                deployments = int(row.deployments)
+                unique_clients = int(row.unique_clients)
+                successes = int(row.successes)
+                success_rate = float(successes) / float(deployments) if deployments > 0 else 0
+                
+                # Calculate incremental change
+                if prev_success_rate is not None:
+                    incremental = success_rate - prev_success_rate
+                    incremental_str = f"{incremental*100:+.2f}%"
+                else:
+                    incremental_str = "N/A"
+                
+                # Highlight declining performance
+                row_style = " style='background-color: #ffe6e6;'" if prev_success_rate and success_rate < prev_success_rate else ""
+                
+                html_table += f"""
+                <tr{row_style}>
+                    <td style='padding: 8px;'>{bucket}</td>
+                    <td style='padding: 8px; text-align: right;'>{deployments:,}</td>
+                    <td style='padding: 8px; text-align: right;'>{unique_clients:,}</td>
+                    <td style='padding: 8px; text-align: right;'>{successes:,}</td>
+                    <td style='padding: 8px; text-align: right;'>{success_rate*100:.2f}%</td>
+                    <td style='padding: 8px; text-align: right;'>{incremental_str}</td>
+                </tr>
+                """
+                
+                prev_success_rate = success_rate
+        
+        html_table += "</table>"
+        display(HTML(html_table))
     
     # ========================================================================
-    # SECTION 4: CONTACT FREQUENCY BASELINES
+    # SECTION 3: CAMPAIGN OVERLAP ANALYSIS
     # ========================================================================
-    # This section examines how many times clients are being contacted.
-    # Key question: Are we over-contacting our clients?
+    display(HTML("<h2>3. CAMPAIGN OVERLAP ANALYSIS</h2>"))
+    display(HTML("<p>Identifying clients receiving multiple campaigns within 25-day windows</p>"))
     
-    display(HTML("<h2>4. CONTACT FREQUENCY BASELINES (Action Group Only)</h2>"))
-    display(HTML("<p>Understanding contact patterns - are we over-contacting clients?</p>"))
-    
-    # Calculate total contacts per client across ALL campaigns
-    client_contacts = df_action.groupBy("CLNT_NO").agg(
-        F.count("*").alias("total_contacts")
+    # Self-join to find overlaps
+    df1 = df_action.select(
+        F.col("CLNT_NO").alias("client"),
+        F.col("MNE").alias("campaign1"),
+        F.col("TREATMT_STRT_DT").alias("start_date1")
     )
     
-    # Create frequency buckets to categorize contact levels
-    # These buckets help identify over-contacted segments
-    freq_buckets = client_contacts.select(
-        F.when(F.col("total_contacts") <= 3, "1-3 contacts")
-        .when(F.col("total_contacts") <= 10, "4-10 contacts")
-        .when(F.col("total_contacts") > 10, "11+ contacts")
-        .alias("frequency_bucket")
-    ).groupBy("frequency_bucket").count().collect()
+    df2 = df_action.select(
+        F.col("CLNT_NO").alias("client"),
+        F.col("MNE").alias("campaign2"),
+        F.col("TREATMT_STRT_DT").alias("start_date2")
+    )
     
-    # Create a dictionary for easier bucket ordering
-    freq_dict = {}
-    for row in freq_buckets:
-        freq_dict[row.frequency_bucket] = int(row.count)
+    # Join and calculate date differences
+    overlaps = df1.join(
+        df2,
+        (df1.client == df2.client) & 
+        (df1.start_date1 < df2.start_date2)
+    ).withColumn(
+        "days_between", 
+        F.datediff(F.col("start_date2"), F.col("start_date1"))
+    ).filter(
+        F.col("days_between") <= 25
+    )
     
-    bucket_order = ["1-3 contacts", "4-10 contacts", "11+ contacts"]
+    # Count overlaps by campaign pair
+    overlap_summary = overlaps.groupBy("campaign1", "campaign2").agg(
+        F.countDistinct("client").alias("clients_affected"),
+        F.count("*").alias("overlap_instances"),
+        F.avg("days_between").alias("avg_days_between")
+    ).orderBy(F.desc("clients_affected")).collect()
     
-    # Build the contact frequency distribution table
-    display(HTML("<h3>Overall Contact Distribution</h3>"))
+    # Display overlap matrix
+    display(HTML("<h3>Campaign Overlap Matrix (≤25 days)</h3>"))
     
     html_table = """
     <table border='1' style='border-collapse: collapse;'>
     <tr style='background-color: #f2f2f2;'>
-        <th style='padding: 8px;'>Frequency Bucket</th>
-        <th style='padding: 8px; text-align: right;'>Number of Clients</th>
-        <th style='padding: 8px; text-align: right;'>% of Total Clients</th>
+        <th style='padding: 8px;'>Campaign 1</th>
+        <th style='padding: 8px;'>Campaign 2</th>
+        <th style='padding: 8px; text-align: right;'>Clients Affected</th>
+        <th style='padding: 8px; text-align: right;'>Overlap Instances</th>
+        <th style='padding: 8px; text-align: right;'>Avg Days Between</th>
     </tr>
     """
     
-    # Add rows in logical order
-    for bucket in bucket_order:
-        if bucket in freq_dict:
-            count = freq_dict[bucket]
-            pct = float(count) / float(unique_clients) * 100 if unique_clients > 0 else 0
-            
-            # Highlight the over-contacted segment (11+ contacts)
-            row_style = " style='background-color: #ffe6e6;'" if bucket == "11+ contacts" and pct > 20 else ""
-            
-            html_table += f"""
-            <tr{row_style}>
-                <td style='padding: 8px;'>{bucket}</td>
-                <td style='padding: 8px; text-align: right;'>{count:,}</td>
-                <td style='padding: 8px; text-align: right;'>{pct:.1f}%</td>
-            </tr>
-            """
+    # Display top overlaps
+    overlap_count = 0
+    for row in overlap_summary:
+        if overlap_count >= 20:  # Limit to top 20 for readability
+            break
+        
+        # Highlight self-overlaps
+        is_self_overlap = row.campaign1 == row.campaign2
+        row_style = " style='background-color: #ffcccc;'" if is_self_overlap else ""
+        
+        html_table += f"""
+        <tr{row_style}>
+            <td style='padding: 8px;'>{row.campaign1}</td>
+            <td style='padding: 8px;'>{row.campaign2}</td>
+            <td style='padding: 8px; text-align: right;'>{int(row.clients_affected):,}</td>
+            <td style='padding: 8px; text-align: right;'>{int(row.overlap_instances):,}</td>
+            <td style='padding: 8px; text-align: right;'>{float(row.avg_days_between):.1f}</td>
+        </tr>
+        """
+        overlap_count += 1
     
     html_table += "</table>"
     display(HTML(html_table))
     
-    # Calculate and display monthly contact rate
-    # This helps understand contact velocity
-    monthly_rate = 0  # Initialize to avoid scope issues
-    if months_covered > 0:
-        monthly_rate = float(total_deployments) / (float(unique_clients) * float(months_covered))
+    # Calculate total clients with any overlap
+    total_overlap_clients = overlaps.select("client").distinct().count()
+    display(HTML(f"<p><b>Total unique clients with campaign overlaps (≤25 days):</b> {total_overlap_clients:,}</p>"))
+    
+    # ========================================================================
+    # SECTION 4: CAMPAIGN TEMPORAL PATTERNS
+    # ========================================================================
+    display(HTML("<h2>4. CAMPAIGN TEMPORAL PATTERNS</h2>"))
+    display(HTML("<p>Monthly deployment trends and seasonality by campaign</p>"))
+    
+    # Add month column
+    df_monthly = df_action.withColumn(
+        "year_month", 
+        F.date_format("TREATMT_STRT_DT", "yyyy-MM")
+    )
+    
+    # Calculate monthly deployments by campaign
+    monthly_trends = df_monthly.groupBy("year_month", "MNE").agg(
+        F.count("*").alias("deployments"),
+        F.countDistinct("CLNT_NO").alias("unique_clients")
+    ).orderBy("year_month", "MNE").collect()
+    
+    # Organize data by campaign
+    campaign_monthly_data = {}
+    for row in monthly_trends:
+        campaign = row.MNE
+        if campaign not in campaign_monthly_data:
+            campaign_monthly_data[campaign] = []
+        campaign_monthly_data[campaign].append({
+            'month': row.year_month,
+            'deployments': int(row.deployments),
+            'unique_clients': int(row.unique_clients)
+        })
+    
+    # Display trends for each campaign
+    for campaign in sorted(campaign_monthly_data.keys()):
+        display(HTML(f"<h3>Campaign {campaign} - Monthly Trends</h3>"))
         
-        display(HTML("<h3>Monthly Contact Rate</h3>"))
+        months_data = campaign_monthly_data[campaign]
+        
+        # Calculate campaign statistics
+        deployment_values = [m['deployments'] for m in months_data]
+        
+        # Calculate min/max/avg using explicit loops
+        min_deployments = deployment_values[0] if deployment_values else 0
+        max_deployments = deployment_values[0] if deployment_values else 0
+        total_deployments = 0
+        
+        for val in deployment_values:
+            if val < min_deployments:
+                min_deployments = val
+            if val > max_deployments:
+                max_deployments = val
+            total_deployments += val
+        
+        avg_deployments = float(total_deployments) / float(len(deployment_values)) if deployment_values else 0
+        
+        # Check for seasonality (high variance indicates seasonal pattern)
+        variance = 0
+        if len(deployment_values) > 1:
+            for val in deployment_values:
+                variance += (float(val) - avg_deployments) ** 2
+            variance = variance / float(len(deployment_values))
+            std_dev = math.sqrt(variance)
+            cv = std_dev / avg_deployments if avg_deployments > 0 else 0
+        else:
+            cv = 0
+        
+        seasonality = "High" if cv > 0.5 else "Low"
+        
+        # Display summary stats
         html_table = f"""
         <table border='1' style='border-collapse: collapse;'>
         <tr style='background-color: #f2f2f2;'>
@@ -423,296 +456,156 @@ def generate_phase1_analysis(df):
             <th style='padding: 8px; text-align: right;'>Value</th>
         </tr>
         <tr>
-            <td style='padding: 8px;'>Overall Monthly Contact Rate</td>
-            <td style='padding: 8px; text-align: right;'>{monthly_rate:.2f} contacts/client/month</td>
+            <td style='padding: 8px;'>Active Months</td>
+            <td style='padding: 8px; text-align: right;'>{len(months_data)}</td>
+        </tr>
+        <tr>
+            <td style='padding: 8px;'>Min Monthly Deployments</td>
+            <td style='padding: 8px; text-align: right;'>{min_deployments:,}</td>
+        </tr>
+        <tr>
+            <td style='padding: 8px;'>Max Monthly Deployments</td>
+            <td style='padding: 8px; text-align: right;'>{max_deployments:,}</td>
+        </tr>
+        <tr>
+            <td style='padding: 8px;'>Avg Monthly Deployments</td>
+            <td style='padding: 8px; text-align: right;'>{avg_deployments:,.0f}</td>
+        </tr>
+        <tr>
+            <td style='padding: 8px;'>Seasonality Indicator</td>
+            <td style='padding: 8px; text-align: right;'>{seasonality} (CV: {cv:.2f})</td>
         </tr>
         </table>
         """
         display(HTML(html_table))
     
-    
     # ========================================================================
-    # SECTION 5: SUCCESS RATE BASELINES (ENHANCED)
+    # SECTION 5: CAMPAIGN SUCCESS COMPARISON
     # ========================================================================
-    # This section establishes baseline success rates for lift calculations.
-    # We compare action group (TG4) vs control group (TG7).
-    # ENHANCED: Shows volumes and statistical significance
-    
-    display(HTML("<h2>5. SUCCESS RATE BASELINES (Enhanced with Statistical Testing)</h2>"))
-    display(HTML("<p>Baseline success rates with volume details and statistical significance</p>"))
-    
-    # Define which success metric applies to each campaign
-    # This mapping is critical for accurate success measurement
-    campaign_success_map = {
-        'VCN': 'acquisition_success',    # Acquisition campaign
-        'VDA': 'activation_success',      # Activation campaign (note: data quality issue)
-        'VDT': 'activation_success',      # Activation campaign
-        'VUI': 'usage_success',           # Usage campaign
-        'VAW': 'provisioning_success',    # Provisioning campaign
-        'VUT': 'provisioning_success'     # Provisioning campaign
-    }
-    
-    # First, let's check which success columns actually exist in the data
-    df_columns = df.columns
-    existing_success_cols = []
-    
-    # Check each possible success column
-    if 'acquisition_success' in df_columns:
-        existing_success_cols.append('acquisition_success')
-    if 'activation_success' in df_columns:
-        existing_success_cols.append('activation_success')
-    if 'usage_success' in df_columns:
-        existing_success_cols.append('usage_success')
-    if 'provisioning_success' in df_columns:
-        existing_success_cols.append('provisioning_success')
-    
-    display(HTML(f"<p><b>Available success columns:</b> {', '.join(existing_success_cols) if existing_success_cols else 'None found'}</p>"))
-    
-    # Overall Success Metrics with Volume Details
-    display(HTML("<h3>Overall Success Metrics</h3>"))
+    display(HTML("<h2>5. CAMPAIGN SUCCESS COMPARISON</h2>"))
+    display(HTML("<p>Head-to-head campaign performance with statistical significance</p>"))
     
     html_table = """
     <table border='1' style='border-collapse: collapse;'>
     <tr style='background-color: #f2f2f2;'>
-        <th style='padding: 8px;'>Metric</th>
-        <th style='padding: 8px; text-align: right;'>Action (TG4)</th>
-        <th style='padding: 8px; text-align: right;'>Control (TG7)</th>
-        <th style='padding: 8px; text-align: right;'>Lift</th>
+        <th style='padding: 8px;'>Campaign</th>
+        <th style='padding: 8px; text-align: right;'>Action Success Rate</th>
+        <th style='padding: 8px; text-align: right;'>Control Success Rate</th>
+        <th style='padding: 8px; text-align: right;'>Absolute Lift</th>
+        <th style='padding: 8px; text-align: right;'>Relative Lift</th>
         <th style='padding: 8px; text-align: right;'>P-Value</th>
         <th style='padding: 8px;'>Significant?</th>
     </tr>
     """
     
-    # Calculate deployments for each group
-    action_deployments = df_action.count()
-    control_deployments = df_control.count()
-    
-    # Calculate unique clients for each group
-    action_unique_clients = df_action.select("CLNT_NO").distinct().count()
-    control_unique_clients = df_control.select("CLNT_NO").distinct().count()
-    
-    # Add deployment and client rows
-    html_table += f"""
-    <tr>
-        <td style='padding: 8px;'>Total Deployments</td>
-        <td style='padding: 8px; text-align: right;'>{action_deployments:,}</td>
-        <td style='padding: 8px; text-align: right;'>{control_deployments:,}</td>
-        <td style='padding: 8px; text-align: right;'>-</td>
-        <td style='padding: 8px; text-align: right;'>-</td>
-        <td style='padding: 8px;'>-</td>
-    </tr>
-    <tr>
-        <td style='padding: 8px;'>Unique Clients</td>
-        <td style='padding: 8px; text-align: right;'>{action_unique_clients:,}</td>
-        <td style='padding: 8px; text-align: right;'>{control_unique_clients:,}</td>
-        <td style='padding: 8px; text-align: right;'>-</td>
-        <td style='padding: 8px; text-align: right;'>-</td>
-        <td style='padding: 8px;'>-</td>
-    </tr>
-    """
-    
-    # Calculate overall success if we have success columns
-    if existing_success_cols:
-        # Create a column that checks if ANY success occurred
-        success_expr_list = [F.col(col) for col in existing_success_cols]
+    for campaign in campaign_names:
+        # Get success metric for this campaign
+        success_col = campaign_success_map.get(campaign, 'activation_success')
         
-        # Calculate successes for action group
-        action_success_df = df_action.select(
-            F.greatest(*success_expr_list).alias("any_success")
-        ).agg(
-            F.sum(F.when(F.col("any_success") == 1, 1).otherwise(0)).alias("success_count"),
-            F.count("*").alias("total_count")
+        if success_col not in df.columns:
+            continue
+        
+        # Calculate success metrics for action group
+        action_metrics = df_action.filter(F.col("MNE") == campaign).agg(
+            F.count("*").alias("total"),
+            F.sum(F.when(F.col(success_col) == 1, 1).otherwise(0)).alias("successes")
         ).collect()[0]
         
-        action_success_count = int(action_success_df.success_count) if action_success_df.success_count else 0
-        action_total_count = int(action_success_df.total_count)
-        action_success_rate = float(action_success_count) / float(action_total_count) if action_total_count > 0 else 0
+        action_total = int(action_metrics.total) if action_metrics.total else 0
+        action_success = int(action_metrics.successes) if action_metrics.successes else 0
+        action_rate = float(action_success) / float(action_total) if action_total > 0 else 0
         
-        # Calculate successes for control group
-        control_success_df = df_control.select(
-            F.greatest(*success_expr_list).alias("any_success")
-        ).agg(
-            F.sum(F.when(F.col("any_success") == 1, 1).otherwise(0)).alias("success_count"),
-            F.count("*").alias("total_count")
+        # Calculate success metrics for control group
+        control_metrics = df_control.filter(F.col("MNE") == campaign).agg(
+            F.count("*").alias("total"),
+            F.sum(F.when(F.col(success_col) == 1, 1).otherwise(0)).alias("successes")
         ).collect()[0]
         
-        control_success_count = int(control_success_df.success_count) if control_success_df.success_count else 0
-        control_total_count = int(control_success_df.total_count)
-        control_success_rate = float(control_success_count) / float(control_total_count) if control_total_count > 0 else 0
+        control_total = int(control_metrics.total) if control_metrics.total else 0
+        control_success = int(control_metrics.successes) if control_metrics.successes else 0
+        control_rate = float(control_success) / float(control_total) if control_total > 0 else 0
         
-        # Calculate lift and statistical significance
-        lift = action_success_rate - control_success_rate
+        # Calculate lifts
+        absolute_lift = action_rate - control_rate
+        relative_lift = (action_rate / control_rate - 1) if control_rate > 0 else 0
+        
+        # Statistical significance
         sig_test = calculate_statistical_significance(
-            action_success_count, action_total_count,
-            control_success_count, control_total_count
+            action_success, action_total,
+            control_success, control_total
         )
         
-        # Add success metrics rows
+        # Highlight top performers
+        row_style = ""
+        if action_rate > 0.5:  # >50% success rate
+            row_style = " style='background-color: #ccffcc;'"
+        elif action_rate < 0.01:  # <1% success rate
+            row_style = " style='background-color: #ffcccc;'"
+        
         html_table += f"""
-        <tr>
-            <td style='padding: 8px;'>Successful Deployments</td>
-            <td style='padding: 8px; text-align: right;'>{action_success_count:,}</td>
-            <td style='padding: 8px; text-align: right;'>{control_success_count:,}</td>
-            <td style='padding: 8px; text-align: right;'>-</td>
-            <td style='padding: 8px; text-align: right;'>-</td>
-            <td style='padding: 8px;'>-</td>
-        </tr>
-        <tr>
-            <td style='padding: 8px;'><b>Success Rate</b></td>
-            <td style='padding: 8px; text-align: right;'><b>{action_success_rate*100:.2f}%</b></td>
-            <td style='padding: 8px; text-align: right;'><b>{control_success_rate*100:.2f}%</b></td>
-            <td style='padding: 8px; text-align: right;'><b>{lift*100:.2f}%</b></td>
-            <td style='padding: 8px; text-align: right;'><b>{sig_test['p_value']:.4f}</b></td>
-            <td style='padding: 8px;'><b>{'Yes ✓' if sig_test['is_significant'] else 'No'}</b></td>
+        <tr{row_style}>
+            <td style='padding: 8px;'>{campaign}</td>
+            <td style='padding: 8px; text-align: right;'>{action_rate*100:.2f}%</td>
+            <td style='padding: 8px; text-align: right;'>{control_rate*100:.2f}%</td>
+            <td style='padding: 8px; text-align: right;'>{absolute_lift*100:.2f}%</td>
+            <td style='padding: 8px; text-align: right;'>{relative_lift*100:.1f}%</td>
+            <td style='padding: 8px; text-align: right;'>{sig_test['p_value']:.4f}</td>
+            <td style='padding: 8px;'>{'Yes ✓' if sig_test['is_significant'] else 'No'}</td>
         </tr>
         """
     
     html_table += "</table>"
     display(HTML(html_table))
     
-    # Success rates by campaign type
-    # Group campaigns by their objective
-    display(HTML("<h3>Success Rates by Campaign Type</h3>"))
+    # ========================================================================
+    # SECTION 6: KEY INSIGHTS AND RECOMMENDATIONS
+    # ========================================================================
+    display(HTML("<h2>6. KEY INSIGHTS FROM CAMPAIGN ANALYSIS</h2>"))
     
-    campaign_types = {
-        'Acquisition': ['VCN'],
-        'Activation': ['VDA', 'VDT'],
-        'Usage': ['VUI'],
-        'Provisioning': ['VAW', 'VUT']
-    }
+    insights = []
     
-    html_table = """
-    <table border='1' style='border-collapse: collapse;'>
-    <tr style='background-color: #f2f2f2;'>
-        <th style='padding: 8px;'>Campaign Type</th>
-        <th style='padding: 8px; text-align: right;'>Action Deployments</th>
-        <th style='padding: 8px; text-align: right;'>Control Deployments</th>
-        <th style='padding: 8px; text-align: right;'>Action Rate</th>
-        <th style='padding: 8px; text-align: right;'>Control Rate</th>
-        <th style='padding: 8px; text-align: right;'>Lift</th>
-        <th style='padding: 8px; text-align: right;'>P-Value</th>
-        <th style='padding: 8px;'>Significant?</th>
-    </tr>
-    """
-    
-    # Calculate success rates for each campaign type
-    for campaign_type, campaigns in campaign_types.items():
-        # Determine the appropriate success column for this campaign type
-        if campaign_type == 'Acquisition':
-            success_col = 'acquisition_success'
-        elif campaign_type == 'Activation':
-            success_col = 'activation_success'
-        elif campaign_type == 'Usage':
-            success_col = 'usage_success'
-        else:  # Provisioning
-            success_col = 'provisioning_success'
+    # Insight 1: Campaign volume imbalance
+    if campaign_metrics:
+        # Find campaign with most deployments
+        max_campaign = None
+        max_deployments = 0
+        total_deployments = 0
         
-        # Only calculate if the success column exists in the data
-        if success_col in df_columns:
-            # Get deployment counts and success metrics for action group
-            action_metrics = df_action.filter(F.col("MNE").isin(campaigns)).agg(
-                F.count("*").alias("total_deployments"),
-                F.sum(F.when(F.col(success_col) == 1, 1).otherwise(0)).alias("success_count")
-            ).collect()[0]
-            
-            action_total = int(action_metrics.total_deployments) if action_metrics.total_deployments else 0
-            action_success = int(action_metrics.success_count) if action_metrics.success_count else 0
-            action_rate = float(action_success) / float(action_total) if action_total > 0 else 0
-            
-            # Get deployment counts and success metrics for control group
-            control_metrics = df_control.filter(F.col("MNE").isin(campaigns)).agg(
-                F.count("*").alias("total_deployments"),
-                F.sum(F.when(F.col(success_col) == 1, 1).otherwise(0)).alias("success_count")
-            ).collect()[0]
-            
-            control_total = int(control_metrics.total_deployments) if control_metrics.total_deployments else 0
-            control_success = int(control_metrics.success_count) if control_metrics.success_count else 0
-            control_rate = float(control_success) / float(control_total) if control_total > 0 else 0
-            
-            # Calculate lift and significance
-            lift = action_rate - control_rate
-            sig_test = calculate_statistical_significance(
-                action_success, action_total,
-                control_success, control_total
-            )
-            
-            html_table += f"""
-            <tr>
-                <td style='padding: 8px;'>{campaign_type}</td>
-                <td style='padding: 8px; text-align: right;'>{action_total:,}</td>
-                <td style='padding: 8px; text-align: right;'>{control_total:,}</td>
-                <td style='padding: 8px; text-align: right;'>{action_rate*100:.2f}%</td>
-                <td style='padding: 8px; text-align: right;'>{control_rate*100:.2f}%</td>
-                <td style='padding: 8px; text-align: right;'>{lift*100:.2f}%</td>
-                <td style='padding: 8px; text-align: right;'>{sig_test['p_value']:.4f}</td>
-                <td style='padding: 8px;'>{'Yes ✓' if sig_test['is_significant'] else 'No'}</td>
-            </tr>
-            """
+        for m in campaign_metrics:
+            total_deployments += m['action_deployments']
+            if m['action_deployments'] > max_deployments:
+                max_deployments = m['action_deployments']
+                max_campaign = m['campaign']
+        
+        if max_campaign and total_deployments > 0:
+            dominance = float(max_deployments) / float(total_deployments) * 100
+            if dominance > 50:
+                insights.append(f"Campaign {max_campaign} dominates with {dominance:.1f}% of all deployments")
     
-    html_table += "</table>"
-    display(HTML(html_table))
+    # Insight 2: Over-contacting within campaigns
+    for m in campaign_metrics:
+        if m['max_contacts'] > 10:
+            insights.append(f"Campaign {m['campaign']} shows over-contacting with up to {m['max_contacts']} contacts per client")
     
+    # Insight 3: Overlap issues
+    if total_overlap_clients > 0:
+        overlap_pct = float(total_overlap_clients) / float(df_action.select("CLNT_NO").distinct().count()) * 100
+        insights.append(f"{overlap_pct:.1f}% of clients experience campaign overlaps within 25-day windows")
+    
+    # Display insights
+    if insights:
+        html_list = "<ul>"
+        for insight in insights:
+            html_list += f"<li>{insight}</li>"
+        html_list += "</ul>"
+        display(HTML(html_list))
     
     # ========================================================================
-    # SECTION 6: KEY BASELINE OBSERVATIONS (AUTOMATED)
-    # ========================================================================
-    # This section automatically identifies notable patterns in the baseline data
-    
-    display(HTML("<h2>6. KEY BASELINE OBSERVATIONS</h2>"))
-    display(HTML("<p>Automated insights from the baseline metrics</p>"))
-    
-    observations = []
-    
-    # Observation 1: Check for campaign dominance
-    if campaign_volumes:
-        top_campaign = campaign_volumes[0]
-        dominance_pct = float(top_campaign.deployments) / float(total_deployments) * 100
-        if dominance_pct > 50:
-            observations.append(f"{top_campaign.MNE} dominates with {dominance_pct:.1f}% of all deployments")
-    
-    # Observation 2: Check for over-contacting
-    if "11+ contacts" in freq_dict:
-        over_contacted_pct = float(freq_dict["11+ contacts"]) / float(unique_clients) * 100
-        if over_contacted_pct > 20:
-            observations.append(f"{over_contacted_pct:.1f}% of clients receive 11+ contacts (potential over-contacting)")
-    
-    # Observation 3: Monthly contact rate insight
-    if months_covered > 0 and monthly_rate > 0:
-        if monthly_rate > 1:
-            observations.append(f"Average client receives {monthly_rate:.1f} contacts per month")
-    
-    # Observation 4: Test/Control split insight
-    action_group = None
-    for row in test_group_split:
-        if row.TST_GRP_CD == "TG4":
-            action_group = row
-            break
-    
-    if action_group and total_all_deployments > 0:
-        action_pct = float(action_group.deployments) / float(total_all_deployments) * 100
-        observations.append(f"Action group (TG4) represents {action_pct:.1f}% of total deployments")
-    
-    # Observation 5: SRM warning if detected
-    if srm_result['srm_detected']:
-        observations.append("⚠️ Sample Ratio Mismatch detected - randomization may be compromised")
-    
-    # Display observations as a bulleted list
-    if observations:
-        obs_html = "<ul>"
-        for obs in observations:
-            obs_html += f"<li>{obs}</li>"
-        obs_html += "</ul>"
-        display(HTML(obs_html))
-    else:
-        display(HTML("<p>No significant patterns detected in baseline metrics.</p>"))
-    
-    
-    # ========================================================================
-    # FOOTER - Analysis completion confirmation
+    # FOOTER
     # ========================================================================
     display(HTML("<hr>"))
-    display(HTML("<p><b>Phase 1 Analysis Complete</b> - Baseline metrics established</p>"))
-    display(HTML("<p><i>Version 2.0 - Enhanced with statistical testing and volume details</i></p>"))
+    display(HTML("<p><b>Phase 2 Analysis Complete</b> - Campaign interaction patterns analyzed</p>"))
+    display(HTML("<p><i>Ready for Phase 3: Journey Analysis</i></p>"))
 
 
 # ========================================================================
@@ -723,19 +616,16 @@ if __name__ == "__main__":
     To run this analysis:
     1. Ensure Spark session is initialized
     2. Load the data from HDFS
-    3. Call generate_phase1_analysis(df)
+    3. Call generate_phase2_analysis(df)
     
     Example:
     --------
     spark = SparkSession.builder \
-        .appName("VVD_Campaign_Analysis_Phase1_v2") \
+        .appName("VVD_Campaign_Analysis_Phase2") \
         .enableHiveSupport() \
         .getOrCreate()
     
     df = spark.read.parquet("/user/427966379/final_df.parquet")
-    generate_phase1_analysis(df)
+    generate_phase2_analysis(df)
     """
-    
-    # Note: The actual execution will be done in the Jupyter notebook
-    # This block is here for documentation purposes
     pass
