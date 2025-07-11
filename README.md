@@ -277,6 +277,7 @@ def generate_phase1_analysis(df):
     
     # Calculate and display monthly contact rate
     # This helps understand contact velocity
+    monthly_rate = 0  # Initialize to avoid scope issues
     if months_covered > 0:
         monthly_rate = total_deployments / (unique_clients * months_covered)
         
@@ -461,7 +462,7 @@ def generate_phase1_analysis(df):
             observations.append(f"{over_contacted_pct:.1f}% of clients receive 11+ contacts (potential over-contacting)")
     
     # Observation 3: Monthly contact rate insight
-    if months_covered > 0:
+    if months_covered > 0 and monthly_rate > 0:
         if monthly_rate > 1:
             observations.append(f"Average client receives {monthly_rate:.1f} contacts per month")
     
